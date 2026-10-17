@@ -3,9 +3,8 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
-<title>照片球體畫廊 · 穩定版</title>
+<title>照片球體畫廊 · 單機完美版</title>
 <style>
-  /* CSS 保持不變，為了篇幅省略，請保留你原本的 CSS */
   *, *::before, *::after { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
   body {
@@ -22,6 +21,11 @@
   #empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; font-size: 15px; color: #7a879c; pointer-events: none; text-align: center; }
   #empty span { font-size: 12.5px; color: #9aa6b8; }
   #empty.hidden { display: none; }
+  #progress { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); width: 70%; max-width: 320px; background: rgba(255,255,255,.86); border: 1px solid rgba(255,255,255,.95); border-radius: 12px; padding: 10px 14px; box-shadow: 0 6px 24px rgba(60,80,120,.12); backdrop-filter: blur(10px); pointer-events: none; transition: opacity .3s ease; }
+  #progress.hidden { opacity: 0; }
+  .progress-bar { height: 4px; border-radius: 2px; background: #e3e9f2; overflow: hidden; }
+  #progressFill { height: 100%; width: 0%; background: linear-gradient(90deg, #5b8def, #8a6bf5); border-radius: 2px; transition: width .2s ease; }
+  #progressText { margin-top: 6px; font-size: 11.5px; color: #7a879c; text-align: center; }
   #panel { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 20px calc(12px + env(safe-area-inset-bottom, 0px)); background: #ffffff; border-top: 1px solid #e5ebf3; flex-wrap: wrap; }
   .info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .count { font-size: 14px; color: #5a6880; }
@@ -51,7 +55,11 @@
   <div id="stage">
     <canvas id="c"></canvas>
     <div id="hud"><div class="pill">拖曳旋轉 · 點擊浮出 · 雙擊返回</div></div>
-    <div id="empty">還沒有照片<span>點擊下方「上傳照片」開始</span></div>
+    <div id="empty">還沒有照片<span>點擊下方「上傳照片」開始（照片會自動保存在本地）</span></div>
+    <div id="progress" class="hidden">
+      <div class="progress-bar"><div id="progressFill"></div></div>
+      <div id="progressText"></div>
+    </div>
   </div>
   <div id="panel">
     <div class="info">
@@ -96,6 +104,9 @@ const overlay   = document.getElementById('overlay');
 const floatImg  = document.getElementById('floatImg');
 const floatMeta = document.getElementById('floatMeta');
 const hud       = document.getElementById('hud');
+const progressEl   = document.getElementById('progress');
+const progressFill = document.getElementById('progressFill');
+const progressText = document.getElementById('progressText');
 
 /* ============ Three.js 基礎 ============ */
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
@@ -128,6 +139,44 @@ let floatOrigin = { x: 0, y: 0 };
 let pendingFiles = [];
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+/* ============ IndexedDB 本地儲存 ============ */
+let db = null;
+function initDB() {
+  return new Promise((resolve) => {
+    const req = indexedDB.open('LocalPhotoGallery', 1);
+    req.onupgradeneeded = (e) => {
+      const database = e.target.result;
+      if (!database.objectStoreNames.contains('photos')) {
+        database.createObjectStore('photos', { keyPath: 'id', autoIncrement: true });
+      }
+    };
+    req.onsuccess = (e) => { db = e.target.result; resolve(); };
+    req.onerror = () => { console.warn('IndexedDB 無法使用'); resolve(); };
+  });
+}
+
+function saveToDB(data) {
+  if (!db) return;
+  const tx = db.transaction('photos', 'readwrite');
+  tx.objectStore('photos').put(data);
+}
+
+function clearDB() {
+  if (!db) return;
+  const tx = db.transaction('photos', 'readwrite');
+  tx.objectStore('photos').clear();
+}
+
+function loadFromDB() {
+  return new Promise((resolve) => {
+    if (!db) return resolve([]);
+    const tx = db.transaction('photos', 'readonly');
+    const req = tx.objectStore('photos').getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => resolve([]);
+  });
+}
 
 /* ============ 布局邏輯 ============ */
 function rebuildSphere() {
@@ -176,28 +225,31 @@ function rebuildSphere() {
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.copy(pos);
     mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir);
-
     pivot.add(mesh);
     
     const photoData = {
       mesh, texture: file.texture, 
-      thumbUrl: file.thumbUrl, 
-      displayUrl: file.displayUrl, // 新增：高畫質大圖
-      aspect, name: file.name,
-      pos, normal: dir, w, h
+      thumbUrl: file.thumbUrl, displayUrl: file.displayUrl,
+      aspect, name: file.name, pos, normal: dir, w, h
     };
     photos.push(photoData);
     meshes.push(mesh);
   }
 }
 
-/* ============ 處理上傳（生成兩份圖片） ============ */
+/* ============ 上傳與圖片處理 ============ */
 fileInput.addEventListener('change', async (e) => {
   const files = Array.from(e.target.files || []).filter(f => f.type.startsWith('image/'));
   if (!files.length) return;
   e.target.value = '';
 
+  progressEl.classList.remove('hidden');
+  let current = 0;
+
   for (const file of files) {
+    progressText.textContent = `處理中 ${current + 1} / ${files.length}`;
+    progressFill.style.width = `${(current / files.length) * 100}%`;
+
     try {
       const url = URL.createObjectURL(file);
       const img = new Image();
@@ -207,44 +259,47 @@ fileInput.addEventListener('change', async (e) => {
         img.onerror = reject;
       });
 
-      // 1. 生成球面縮圖 (最大邊 512px，保持效能)
+      // 1. 生成球面縮圖 (最大邊 512px)
       const scaleThumb = Math.min(1, 512 / Math.max(img.width, img.height));
       const tw = Math.max(1, Math.round(img.width * scaleThumb));
       const th = Math.max(1, Math.round(img.height * scaleThumb));
       const cvThumb = document.createElement('canvas');
-      cvThumb.width = tw;
-      cvThumb.height = th;
+      cvThumb.width = tw; cvThumb.height = th;
       cvThumb.getContext('2d').drawImage(img, 0, 0, tw, th);
       const thumbUrl = cvThumb.toDataURL('image/jpeg', 0.85);
 
-      // 2. 生成點擊大圖 (最大邊 1024px，保持清晰度)
+      // 2. 生成點擊大圖 (最大邊 1024px)
       const scaleDisplay = Math.min(1, 1024 / Math.max(img.width, img.height));
       const dw = Math.max(1, Math.round(img.width * scaleDisplay));
       const dh = Math.max(1, Math.round(img.height * scaleDisplay));
       const cvDisplay = document.createElement('canvas');
-      cvDisplay.width = dw;
-      cvDisplay.height = dh;
+      cvDisplay.width = dw; cvDisplay.height = dh;
       cvDisplay.getContext('2d').drawImage(img, 0, 0, dw, dh);
       const displayUrl = cvDisplay.toDataURL('image/jpeg', 0.9);
 
-      // 用縮圖生成 Three.js 紋理
       const tex = new THREE.CanvasTexture(cvThumb);
       tex.colorSpace = THREE.SRGBColorSpace;
       tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
 
-      pendingFiles.push({
-        texture: tex,
-        thumbUrl: thumbUrl,
-        displayUrl: displayUrl, // 儲存大圖
-        aspect: img.width / img.height,
-        name: file.name
-      });
+      const photoData = {
+        texture: tex, thumbUrl, displayUrl,
+        aspect: img.width / img.height, name: file.name
+      };
+
+      pendingFiles.push(photoData);
+      
+      // 存入 IndexedDB (不存 texture，因為無法直接存，存 url 即可)
+      saveToDB({ thumbUrl, displayUrl, aspect: photoData.aspect, name: photoData.name });
 
       URL.revokeObjectURL(url);
+      current++;
     } catch (err) {
       console.warn('讀取圖片失敗', err);
     }
   }
+
+  progressFill.style.width = '100%';
+  setTimeout(() => progressEl.classList.add('hidden'), 500);
 
   rebuildSphere();
   updateUI();
@@ -269,8 +324,7 @@ function pick(cx, cy) {
   const hits = raycaster.intersectObjects(meshes, false);
 
   if (hits.length > 0) {
-    const hitMesh = hits[0].object;
-    return photos.find(p => p.mesh === hitMesh);
+    return photos.find(p => p.mesh === hits[0].object);
   }
   return null;
 }
@@ -282,7 +336,6 @@ async function floatPhoto(photo, cx, cy) {
   selectedPhoto = photo;
   velX = velY = 0;
 
-  // 使用高畫質大圖
   floatImg.src = photo.displayUrl;
   floatMeta.textContent = `${photo.name || '照片'} · 雙擊或按 ESC 返回`;
 
@@ -433,6 +486,7 @@ document.getElementById('btnClear').addEventListener('click', () => {
   if (!window.confirm('確定要清空所有照片嗎？')) return;
   
   pendingFiles = [];
+  clearDB(); // 清空本地資料庫
   rebuildSphere();
   updateUI();
 });
@@ -479,9 +533,31 @@ function animate(now) {
   renderer.render(scene, camera);
 }
 
-new ResizeObserver(resize).observe(stage);
-resize();
-requestAnimationFrame(animate);
+/* ============ 啟動 ============ */
+async function init() {
+  await initDB();
+  new ResizeObserver(resize).observe(stage);
+  resize();
+  requestAnimationFrame(animate);
+
+  // 從本地讀取之前上傳的照片
+  const saved = await loadFromDB();
+  if (saved.length > 0) {
+    saved.forEach(data => {
+      const img = new Image();
+      img.src = data.thumbUrl;
+      img.onload = () => {
+        const tex = new THREE.CanvasTexture(img);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+        
+        pendingFiles.push({ ...data, texture: tex });
+        rebuildSphere();
+      };
+    });
+  }
+}
+init();
 </script>
 </body>
 </html>

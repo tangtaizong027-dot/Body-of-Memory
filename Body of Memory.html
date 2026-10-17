@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
-<title>照片球體畫廊 · 1000張版</title>
+<title>照片球體畫廊 · 穩定版</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
@@ -56,37 +56,6 @@
   #empty span { font-size: 12.5px; color: #9aa6b8; }
   #empty.hidden { display: none; }
 
-  #progress {
-    position: absolute; left: 50%; bottom: 18px;
-    transform: translateX(-50%);
-    width: 70%; max-width: 320px;
-    background: rgba(255,255,255,.86);
-    border: 1px solid rgba(255,255,255,.95);
-    border-radius: 12px;
-    padding: 10px 14px;
-    box-shadow: 0 6px 24px rgba(60,80,120,.12);
-    backdrop-filter: blur(10px);
-    pointer-events: none;
-    transition: opacity .3s ease;
-  }
-  #progress.hidden { opacity: 0; }
-  .progress-bar {
-    height: 4px; border-radius: 2px;
-    background: #e3e9f2;
-    overflow: hidden;
-  }
-  #progressFill {
-    height: 100%; width: 0%;
-    background: linear-gradient(90deg, #5b8def, #8a6bf5);
-    border-radius: 2px;
-    transition: width .2s ease;
-  }
-  #progressText {
-    margin-top: 6px;
-    font-size: 11.5px; color: #7a879c;
-    text-align: center;
-  }
-
   #panel {
     flex: 0 0 auto;
     display: flex; align-items: center; justify-content: space-between;
@@ -116,7 +85,6 @@
     border-color: transparent; color: #fff; font-weight: 600;
     box-shadow: 0 4px 14px rgba(91,141,239,.28);
   }
-  .btn.primary:hover { filter: brightness(1.05); }
 
   #overlay {
     position: fixed; inset: 0; z-index: 60;
@@ -154,7 +122,6 @@
     #panel { padding: 10px 14px calc(10px + env(safe-area-inset-bottom, 0px)); }
     .actions { width: 100%; justify-content: space-between; }
     .btn { flex: 1 1 auto; text-align: center; padding: 9px 8px; font-size: 12.5px; }
-    .sel { max-width: 160px; }
   }
 </style>
 </head>
@@ -164,11 +131,7 @@
   <div id="stage">
     <canvas id="c"></canvas>
     <div id="hud"><div class="pill">拖曳旋轉 · 點擊浮出 · 雙擊返回</div></div>
-    <div id="empty">還沒有照片<span>點擊下方「上傳照片」開始，最多 1000 張</span></div>
-    <div id="progress" class="hidden">
-      <div class="progress-bar"><div id="progressFill"></div></div>
-      <div id="progressText"></div>
-    </div>
+    <div id="empty">還沒有照片<span>點擊下方「上傳照片」開始</span></div>
   </div>
   <div id="panel">
     <div class="info">
@@ -200,13 +163,6 @@
 <script type="module">
 import * as THREE from 'three';
 
-/* ============ 常量 ============ */
-const MAX_PHOTOS = 1000;
-const CELL = 128;
-const ATLAS_GRID = 16;
-const ATLAS_SIZE = CELL * ATLAS_GRID;
-const CELLS_PER_ATLAS = ATLAS_GRID * ATLAS_GRID;
-const ATLAS_COUNT = Math.ceil(MAX_PHOTOS / CELLS_PER_ATLAS);
 const RADIUS = 3;
 
 /* ============ DOM ============ */
@@ -220,9 +176,6 @@ const overlay   = document.getElementById('overlay');
 const floatImg  = document.getElementById('floatImg');
 const floatMeta = document.getElementById('floatMeta');
 const hud       = document.getElementById('hud');
-const progressEl   = document.getElementById('progress');
-const progressFill = document.getElementById('progressFill');
-const progressText = document.getElementById('progressText');
 
 /* ============ Three.js 基礎 ============ */
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
@@ -235,10 +188,8 @@ const pivot  = new THREE.Group();
 scene.add(pivot);
 
 /* ============ 狀態 ============ */
-let photos = [];
-let readyPhotos = [];
-const photosById = new Map();
-let nextPhotoId = 0;
+let photos = []; // 存放 { mesh, texture, url, aspect, name, pos, normal }
+let meshes = [];
 
 let dragging = false;
 let pointerDown = false;
@@ -253,590 +204,158 @@ let floating = false;
 let returning = false;
 let selectedPhoto = null;
 let floatOrigin = { x: 0, y: 0 };
-let currentDisplayURL = null;
-let hoverPhoto = null;
-
-let totalPending = 0;
-let totalDone = 0;
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
-/* ============ 材質（可靠的基礎材質加簡單注入） ============ */
-function createMaterial(texture) {
-  const mat = new THREE.MeshBasicMaterial({
-    map: texture,
-    side: THREE.DoubleSide,
-    transparent: false,
-    alphaTest: 0.02,
-    depthWrite: true,
-  });
-
-  mat.onBeforeCompile = (shader) => {
-    shader.vertexShader = shader.vertexShader.replace(
-      '#include <common>',
-      `#include <common>
-       varying float vFacing;
-      `
-    );
-    shader.vertexShader = shader.vertexShader.replace(
-      '#include <begin_vertex>',
-      `#include <begin_vertex>
-       vec4 worldPos = modelMatrix * vec4(transformed, 1.0);
-       vec3 worldNormal = normalize(mat3(modelMatrix) * objectNormal);
-       vec3 viewDir = normalize(cameraPosition - worldPos.xyz);
-       vFacing = dot(worldNormal, viewDir);
-      `
-    );
-    shader.fragmentShader = shader.fragmentShader.replace(
-      '#include <common>',
-      `#include <common>
-       varying float vFacing;
-      `
-    );
-    shader.fragmentShader = shader.fragmentShader.replace(
-      '#include <map_fragment>',
-      `#include <map_fragment>
-       float darken = smoothstep(-0.6, 0.2, vFacing);
-       diffuseColor.rgb *= mix(0.4, 1.0, darken);
-      `
-    );
-  };
-
-  return mat;
-}
-
-/* ============ 圖集與幾何體 ============ */
-class Atlas {
-  constructor(index) {
-    this.index = index;
-    this.canvas = document.createElement('canvas');
-    this.canvas.width = ATLAS_SIZE;
-    this.canvas.height = ATLAS_SIZE;
-    this.ctx = this.canvas.getContext('2d');
-
-    this.texture = new THREE.CanvasTexture(this.canvas);
-    this.texture.colorSpace = THREE.SRGBColorSpace;
-    this.texture.minFilter = THREE.LinearMipmapLinearFilter;
-    this.texture.magFilter = THREE.LinearFilter;
-    this.texture.generateMipmaps = true;
-    this.texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
-
-    this.material = createMaterial(this.texture);
-    this.mesh = new THREE.Mesh(new THREE.BufferGeometry(), this.material);
-    this.mesh.frustumCulled = false;
-    pivot.add(this.mesh);
-
-    this.used = 0;
-    this.dirty = false;
-  }
-
-  drawCell(cellIdx, bitmap) {
-    const col = cellIdx % ATLAS_GRID;
-    const row = Math.floor(cellIdx / ATLAS_GRID);
-    const cx = col * CELL;
-    const cy = row * CELL;
-
-    this.ctx.clearRect(cx, cy, CELL, CELL);
-    const tw = bitmap.width;
-    const th = bitmap.height;
-    const x = cx + (CELL - tw) / 2;
-    const y = cy + (CELL - th) / 2;
-    this.ctx.drawImage(bitmap, x, y, tw, th);
-
-    this.used = Math.max(this.used, cellIdx + 1);
-    this.dirty = true;
-  }
-
-  flush() {
-    if (this.dirty) {
-      this.texture.needsUpdate = true;
-      this.dirty = false;
+/* ============ 布局邏輯 ============ */
+function rebuildSphere() {
+  // 清除舊的 Mesh
+  for (const p of photos) {
+    if (p.mesh) {
+      pivot.remove(p.mesh);
+      p.mesh.geometry.dispose();
+      p.mesh.material.dispose();
+      if (p.texture) p.texture.dispose();
     }
   }
+  photos = [];
+  meshes = [];
 
-  reset() {
-    this.ctx.clearRect(0, 0, ATLAS_SIZE, ATLAS_SIZE);
-    this.texture.needsUpdate = true;
-    this.used = 0;
-    this.dirty = false;
-    this.mesh.geometry.dispose();
-    this.mesh.geometry = new THREE.BufferGeometry();
-  }
-}
-
-const atlases = [];
-for (let i = 0; i < ATLAS_COUNT; i++) atlases.push(new Atlas(i));
-
-/* ============ 合併幾何體輔助函數 ============ */
-function mergeSimpleGeometries(geometries) {
-  let totalVertices = 0;
-  let totalIndices = 0;
-  for (const g of geometries) {
-    totalVertices += g.attributes.position.count;
-    totalIndices += g.index ? g.index.count : 0;
-  }
-
-  const posArr = new Float32Array(totalVertices * 3);
-  const normArr = new Float32Array(totalVertices * 3);
-  const uvArr = new Float32Array(totalVertices * 2);
-  const indexArr = new Uint32Array(totalIndices);
-
-  let posOffset = 0, normOffset = 0, uvOffset = 0, indexOffset = 0, vertexOffset = 0;
-
-  for (const g of geometries) {
-    const pos = g.attributes.position.array;
-    posArr.set(pos, posOffset);
-    posOffset += pos.length;
-
-    const norm = g.attributes.normal.array;
-    normArr.set(norm, normOffset);
-    normOffset += norm.length;
-
-    const uv = g.attributes.uv.array;
-    uvArr.set(uv, uvOffset);
-    uvOffset += uv.length;
-
-    if (g.index) {
-      const idx = g.index.array;
-      for (let i = 0; i < idx.length; i++) {
-        indexArr[indexOffset + i] = idx[i] + vertexOffset;
-      }
-      indexOffset += idx.length;
-    } else {
-      for (let i = 0; i < g.attributes.position.count; i++) {
-        indexArr[indexOffset + i] = i + vertexOffset;
-      }
-      indexOffset += g.attributes.position.count;
-    }
-
-    vertexOffset += g.attributes.position.count;
-    g.dispose();
-  }
-
-  const mergedGeo = new THREE.BufferGeometry();
-  mergedGeo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
-  mergedGeo.setAttribute('normal', new THREE.BufferAttribute(normArr, 3));
-  mergedGeo.setAttribute('uv', new THREE.BufferAttribute(uvArr, 2));
-  mergedGeo.setIndex(new THREE.BufferAttribute(indexArr, 1));
-  
-  return mergedGeo;
-}
-
-/* ============ 布局 ============ */
-const _dir = new THREE.Vector3();
-const UP = new THREE.Vector3(0, 0, 1);
-
-function layout() {
-  readyPhotos = photos.filter(p => p.ready);
-  const n = readyPhotos.length;
-
-  for (const atlas of atlases) {
-    atlas.mesh.geometry.dispose();
-    atlas.mesh.geometry = new THREE.BufferGeometry();
-  }
-
+  const n = pendingFiles.length;
+  emptyEl.classList.toggle('hidden', n > 0);
+  countEl.textContent = n;
   if (!n) return;
 
   const golden = Math.PI * (3 - Math.sqrt(5));
-  const baseSize = Math.max(0.28, Math.min(0.8, 9.0 / Math.sqrt(n)));
-
-  const geoGroups = Array.from({ length: ATLAS_COUNT }, () => []);
+  // 調整基礎尺寸，保證照片夠大
+  const baseSize = Math.max(0.4, Math.min(0.9, 8.0 / Math.sqrt(n)));
 
   for (let i = 0; i < n; i++) {
-    const photo = readyPhotos[i];
+    const file = pendingFiles[i];
+    const aspect = file.aspect || 1;
 
+    // 計算球面座標
     const y = n === 1 ? 0 : 1 - (i / (n - 1)) * 2;
     const r = Math.sqrt(Math.max(0, 1 - y * y));
     const theta = golden * i;
-    _dir.set(Math.cos(theta) * r, y, Math.sin(theta) * r).normalize();
+    
+    const dir = new THREE.Vector3(
+      Math.cos(theta) * r, y, Math.sin(theta) * r
+    ).normalize();
 
-    const px = _dir.x * RADIUS;
-    const py = _dir.y * RADIUS;
-    const pz = _dir.z * RADIUS;
+    const pos = dir.clone().multiplyScalar(RADIUS);
 
     let w, h;
-    if (photo.aspect >= 1) { w = baseSize; h = baseSize / photo.aspect; }
-    else                   { h = baseSize; w = baseSize * photo.aspect; }
+    if (aspect >= 1) { w = baseSize; h = baseSize / aspect; }
+    else             { h = baseSize; w = baseSize * aspect; }
 
-    photo.pos.set(px, py, pz);
-    photo.normal.copy(_dir);
-    photo.w = w;
-    photo.h = h;
-
+    // 建立最基礎的 Mesh
     const geo = new THREE.PlaneGeometry(w, h);
-    const quat = new THREE.Quaternion().setFromUnitVectors(UP, _dir);
-    geo.applyQuaternion(quat);
-    geo.translate(px, py, pz);
+    const mat = new THREE.MeshBasicMaterial({
+      map: file.texture,
+      side: THREE.DoubleSide, // 雙面可見
+      transparent: true,
+      opacity: 1,
+    });
 
-    const col = photo.cellIdx % ATLAS_GRID;
-    const row = Math.floor(photo.cellIdx / ATLAS_GRID);
-    const u0 = col / ATLAS_GRID;
-    const v0 = 1 - (row + 1) / ATLAS_GRID;
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.copy(pos);
+    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir);
+
+    pivot.add(mesh);
     
-    const uvAttr = geo.attributes.uv;
-    for (let j = 0; j < uvAttr.count; j++) {
-      const u = uvAttr.getX(j);
-      const v = uvAttr.getY(j);
-      uvAttr.setXY(j, u0 + u / ATLAS_GRID, v0 + v / ATLAS_GRID);
-    }
-
-    geoGroups[photo.atlasIdx].push(geo);
-  }
-
-  for (let i = 0; i < ATLAS_COUNT; i++) {
-    if (geoGroups[i].length > 0) {
-      atlases[i].mesh.geometry = mergeSimpleGeometries(geoGroups[i]);
-    }
-  }
-}
-
-let layoutScheduled = false;
-let lastLayoutTime = 0;
-function scheduleLayout() {
-  if (layoutScheduled) return;
-  layoutScheduled = true;
-  const delay = Math.max(0, 180 - (performance.now() - lastLayoutTime));
-  setTimeout(() => {
-    layoutScheduled = false;
-    lastLayoutTime = performance.now();
-    layout();
-    updateUI();
-  }, delay);
-}
-
-/* ============ Worker ============ */
-const workerCode = `
-  self.onmessage = async (e) => {
-    const { id, file } = e.data;
-    try {
-      let bmp;
-      try {
-        bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
-      } catch (_) {
-        bmp = await createImageBitmap(file);
-      }
-
-      const W = bmp.width, H = bmp.height;
-      if (W === 0 || H === 0) throw new Error('Invalid image dimensions');
-
-      const ts = Math.min(1, 124 / Math.max(W, H));
-      const tw = Math.max(1, Math.round(W * ts));
-      const th = Math.max(1, Math.round(H * ts));
-
-      const tc = new OffscreenCanvas(tw, th);
-      const tctx = tc.getContext('2d');
-      tctx.imageSmoothingQuality = 'high';
-      tctx.drawImage(bmp, 0, 0, tw, th);
-      const thumb = tc.transferToImageBitmap();
-
-      const ds = Math.min(1, 1024 / Math.max(W, H));
-      const dw = Math.max(1, Math.round(W * ds));
-      const dh = Math.max(1, Math.round(H * ds));
-
-      const dc = new OffscreenCanvas(dw, dh);
-      const dctx = dc.getContext('2d');
-      dctx.imageSmoothingQuality = 'high';
-      dctx.drawImage(bmp, 0, 0, dw, dh);
-      const display = await dc.convertToBlob({ type: 'image/jpeg', quality: 0.82 });
-
-      bmp.close();
-
-      self.postMessage({ id, thumb, display, width: W, height: H }, [thumb]);
-    } catch (err) {
-      self.postMessage({ id, error: String(err) });
-    }
-  };
-`;
-
-const workerURL = URL.createObjectURL(new Blob([workerCode], { type: 'application/javascript' }));
-const WORKER_COUNT = Math.min(4, Math.max(2, (navigator.hardwareConcurrency || 2) - 1));
-const workers = [];
-const workerBusy = new Array(WORKER_COUNT).fill(false);
-const taskQueue = [];
-
-function initWorkers() {
-  for (let i = 0; i < WORKER_COUNT; i++) {
-    const w = new Worker(workerURL);
-    w.onmessage = (e) => {
-      workerBusy[i] = false;
-      handleWorkerResult(e.data);
-      pumpQueue();
+    const photoData = {
+      mesh, texture: file.texture, url: file.url, aspect, name: file.name,
+      pos, normal: dir, w, h
     };
-    workers.push(w);
-  }
-}
-initWorkers();
-
-function pumpQueue() {
-  for (let i = 0; i < WORKER_COUNT; i++) {
-    if (!workerBusy[i] && taskQueue.length) {
-      const task = taskQueue.shift();
-      workerBusy[i] = true;
-      workers[i].postMessage({ id: task.id, file: task.file });
-    }
+    photos.push(photoData);
+    meshes.push(mesh);
   }
 }
 
-/* ============ IndexedDB ============ */
-let db = null;
+let pendingFiles = [];
 
-function openDB() {
-  return new Promise((resolve) => {
-    const req = indexedDB.open('photo-gallery-v1', 1);
-    req.onupgradeneeded = () => {
-      if (!req.result.objectStoreNames.contains('photos')) {
-        req.result.createObjectStore('photos');
-      }
-    };
-    req.onsuccess = () => { db = req.result; resolve(); };
-    req.onerror = () => { console.warn('IndexedDB 不可用'); resolve(); };
-  });
-}
-
-function saveDisplay(id, blob) {
-  if (!db) return Promise.resolve();
-  return new Promise((resolve) => {
-    try {
-      const tx = db.transaction('photos', 'readwrite');
-      tx.objectStore('photos').put(blob, id);
-      tx.oncomplete = resolve;
-      tx.onerror = resolve;
-    } catch (_) { resolve(); }
-  });
-}
-
-function loadDisplay(id) {
-  if (!db) return Promise.resolve(null);
-  return new Promise((resolve) => {
-    try {
-      const tx = db.transaction('photos', 'readonly');
-      const req = tx.objectStore('photos').get(id);
-      req.onsuccess = () => resolve(req.result || null);
-      req.onerror = () => resolve(null);
-    } catch (_) { resolve(null); }
-  });
-}
-
-function clearDB() {
-  if (!db) return Promise.resolve();
-  return new Promise((resolve) => {
-    try {
-      const tx = db.transaction('photos', 'readwrite');
-      tx.objectStore('photos').clear();
-      tx.oncomplete = resolve;
-      tx.onerror = resolve;
-    } catch (_) { resolve(); }
-  });
-}
-
-/* ============ 上傳流程 ============ */
-function updateProgress() {
-  if (totalPending <= 0) {
-    progressEl.classList.add('hidden');
-    return;
-  }
-  progressEl.classList.remove('hidden');
-  const total = totalDone + totalPending;
-  const pct = total > 0 ? (totalDone / total) * 100 : 0;
-  progressFill.style.width = pct.toFixed(1) + '%';
-  progressText.textContent = `處理中 ${totalDone} / ${total}`;
-}
-
-async function addFiles(fileList) {
-  const files = Array.from(fileList).filter(f => f.type.startsWith('image/'));
+/* ============ 處理上傳 ============ */
+fileInput.addEventListener('change', async (e) => {
+  const files = Array.from(e.target.files || []).filter(f => f.type.startsWith('image/'));
   if (!files.length) return;
+  e.target.value = '';
 
-  const available = MAX_PHOTOS - photos.length;
-  if (available <= 0) {
-    alert(`最多只能放 ${MAX_PHOTOS} 張照片`);
-    return;
-  }
-  const toAdd = files.slice(0, available);
-  if (files.length > available) {
-    alert(`已達 ${MAX_PHOTOS} 張上限，只會加入前 ${available} 張`);
-  }
+  // 讀取圖片並生成紋理
+  for (const file of files) {
+    try {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.src = url;
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = reject;
+      });
 
-  totalPending += toAdd.length;
+      // 為了效能，用 Canvas 縮到最大邊 512px
+      const scale = Math.min(1, 512 / Math.max(img.width, img.height));
+      const cw = Math.max(1, Math.round(img.width * scale));
+      const ch = Math.max(1, Math.round(img.height * scale));
 
-  for (const file of toAdd) {
-    const id = nextPhotoId++;
-    const photo = {
-      id,
-      name: file.name,
-      aspect: 1,
-      globalIndex: photos.length,
-      atlasIdx: -1,
-      cellIdx: -1,
-      pos: new THREE.Vector3(),
-      normal: new THREE.Vector3(),
-      w: 0, h: 0,
-      ready: false,
-    };
-    photos.push(photo);
-    photosById.set(id, photo);
-    taskQueue.push({ id, file });
-  }
+      const cv = document.createElement('canvas');
+      cv.width = cw;
+      cv.height = ch;
+      const ctx = cv.getContext('2d');
+      ctx.drawImage(img, 0, 0, cw, ch);
 
-  updateProgress();
-  pumpQueue();
-}
+      const tex = new THREE.CanvasTexture(cv);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
 
-async function handleWorkerResult(data) {
-  const { id, thumb, display, width, height, error } = data;
-
-  if (error) {
-    console.warn('處理失敗：', error);
-    totalPending--;
-    updateProgress();
-    return;
+      pendingFiles.push({
+        texture: tex,
+        url: cv.toDataURL('image/jpeg', 0.85),
+        aspect: cw / ch,
+        name: file.name
+      });
+    } catch (err) {
+      console.warn('讀取圖片失敗', err);
+    }
   }
 
-  const photo = photosById.get(id);
-  if (!photo) {
-    thumb.close();
-    totalPending--;
-    updateProgress();
-    return;
-  }
-
-  if (!width || !height || width <= 0 || height <= 0) {
-    photo.aspect = 1;
-  } else {
-    photo.aspect = width / height;
-  }
-
-  const globalIdx = photo.globalIndex;
-  const atlasIdx = Math.floor(globalIdx / CELLS_PER_ATLAS);
-  const cellIdx = globalIdx % CELLS_PER_ATLAS;
-
-  if (atlasIdx < ATLAS_COUNT) {
-    const atlas = atlases[atlasIdx];
-    atlas.drawCell(cellIdx, thumb);
-    photo.atlasIdx = atlasIdx;
-    photo.cellIdx = cellIdx;
-    photo.ready = true;
-  }
-
-  thumb.close();
-
-  if (display) saveDisplay(id, display);
-
-  totalPending--;
-  totalDone++;
-  updateProgress();
-
-  scheduleLayout();
-  scheduleFlush();
-}
-
-let flushScheduled = false;
-function scheduleFlush() {
-  if (flushScheduled) return;
-  flushScheduled = true;
-  setTimeout(() => {
-    flushScheduled = false;
-    for (const atlas of atlases) atlas.flush();
-  }, 120);
-}
+  rebuildSphere();
+  updateUI();
+});
 
 /* ============ UI ============ */
 function updateUI() {
-  countEl.textContent = readyPhotos.length;
-  selEl.textContent = selectedPhoto
-    ? (selectedPhoto.name || '已選取照片')
-    : '尚未選取';
-  emptyEl.classList.toggle('hidden', photos.length > 0);
+  selEl.textContent = selectedPhoto ? (selectedPhoto.name || '已選取照片') : '尚未選取';
 }
 
 /* ============ 拾取 ============ */
-const _wp = new THREE.Vector3();
-const _wn = new THREE.Vector3();
+const raycaster = new THREE.Raycaster();
+const pointerNDC = new THREE.Vector2();
 
 function pick(cx, cy) {
-  if (!readyPhotos.length) return null;
-
+  if (!meshes.length) return null;
   const rect = stage.getBoundingClientRect();
-  if (!rect.width || !rect.height) return null;
+  pointerNDC.x = ((cx - rect.left) / rect.width) * 2 - 1;
+  pointerNDC.y = -((cy - rect.top) / rect.height) * 2 + 1;
 
-  const px = cx - rect.left - rect.width / 2;
-  const py = cy - rect.top - rect.height / 2;
+  raycaster.setFromCamera(pointerNDC, camera);
+  const hits = raycaster.intersectObjects(meshes, false);
 
-  const fovRad = THREE.MathUtils.degToRad(camera.fov);
-  const viewH = 2 * Math.tan(fovRad / 2);
-  const projScale = rect.height / viewH;
-
-  let best = null;
-  let bestDepth = Infinity;
-
-  const q = pivot.quaternion;
-  const camPos = camera.position;
-
-  for (let i = 0; i < readyPhotos.length; i++) {
-    const p = readyPhotos[i];
-
-    _wp.copy(p.pos).applyQuaternion(q);
-
-    const dx = _wp.x - camPos.x;
-    const dy = _wp.y - camPos.y;
-    const dz = _wp.z - camPos.z;
-
-    if (dz > -0.5) continue;
-
-    _wn.copy(p.normal).applyQuaternion(q);
-
-    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-    if (dist < 1e-6) continue;
-
-    const vx = -dx / dist, vy = -dy / dist, vz = -dz / dist;
-    const facing = _wn.x * vx + _wn.y * vy + _wn.z * vz;
-    if (facing < 0.15) continue;
-
-    const invZ = projScale / (-dz);
-    const sx = dx * invZ;
-    const sy = -dy * invZ;
-
-    const ddx = sx - px;
-    const ddy = sy - py;
-    const d2 = ddx * ddx + ddy * ddy;
-
-    const sr = Math.min(p.w, p.h) * invZ * 0.65;
-    if (d2 > sr * sr) continue;
-
-    const depth = -dz;
-    if (depth < bestDepth) {
-      bestDepth = depth;
-      best = p;
-    }
+  if (hits.length > 0) {
+    // 找到對應的 photo 物件
+    const hitMesh = hits[0].object;
+    return photos.find(p => p.mesh === hitMesh);
   }
-
-  return best;
+  return null;
 }
 
 /* ============ 浮出 ============ */
-function getThumbDataURL(photo) {
-  const atlas = atlases[photo.atlasIdx];
-  if (!atlas) return '';
-  const col = photo.cellIdx % ATLAS_GRID;
-  const row = Math.floor(photo.cellIdx / ATLAS_GRID);
-  const cx = col * CELL;
-  const cy = row * CELL;
-
-  const temp = document.createElement('canvas');
-  temp.width = CELL;
-  temp.height = CELL;
-  temp.getContext('2d').drawImage(atlas.canvas, cx, cy, CELL, CELL, 0, 0, CELL, CELL);
-  return temp.toDataURL('image/jpeg', 0.8);
-}
-
 async function floatPhoto(photo, cx, cy) {
   if (floating) return;
   floating = true;
   selectedPhoto = photo;
-  hoverPhoto = null;
   velX = velY = 0;
 
-  const thumbURL = getThumbDataURL(photo);
-  if (thumbURL) floatImg.src = thumbURL;
+  floatImg.src = photo.url;
   floatMeta.textContent = `${photo.name || '照片'} · 雙擊或按 ESC 返回`;
 
   const maxW = Math.min(window.innerWidth * 0.86, 1200);
@@ -863,19 +382,6 @@ async function floatPhoto(photo, cx, cy) {
   overlay.classList.add('active');
   hud.classList.add('dim');
   updateUI();
-
-  const blob = await loadDisplay(photo.id);
-  if (blob && selectedPhoto === photo && floating) {
-    if (currentDisplayURL) URL.revokeObjectURL(currentDisplayURL);
-    currentDisplayURL = URL.createObjectURL(blob);
-    const img = new Image();
-    img.onload = () => {
-      if (selectedPhoto === photo && floating) {
-        floatImg.src = currentDisplayURL;
-      }
-    };
-    img.src = currentDisplayURL;
-  }
 }
 
 function returnPhoto() {
@@ -896,32 +402,12 @@ function returnPhoto() {
     floating = false;
     returning = false;
     selectedPhoto = null;
-    if (currentDisplayURL) {
-      URL.revokeObjectURL(currentDisplayURL);
-      currentDisplayURL = null;
-    }
     floatImg.removeAttribute('src');
     updateUI();
   }, 520);
 }
 
-/* ============ 指針事件 ============ */
-let hoverScheduled = false;
-let hoverEvent = null;
-
-function scheduleHover(e) {
-  hoverEvent = e;
-  if (hoverScheduled) return;
-  hoverScheduled = true;
-  requestAnimationFrame(() => {
-    hoverScheduled = false;
-    if (!hoverEvent || dragging || floating) return;
-    const p = pick(hoverEvent.clientX, hoverEvent.clientY);
-    hoverPhoto = p;
-    stage.style.cursor = p ? 'pointer' : 'grab';
-  });
-}
-
+/* ============ 互動事件 ============ */
 stage.addEventListener('pointerdown', (e) => {
   if (floating) return;
   if (e.pointerType === 'mouse' && e.button !== 0) return;
@@ -945,13 +431,11 @@ stage.addEventListener('pointermove', (e) => {
 
     movedDist += Math.abs(dx) + Math.abs(dy);
 
-    pivot.rotation.y += dx * 0.0062;
-    pivot.rotation.x = clamp(pivot.rotation.x + dy * 0.0062, -1.25, 1.25);
+    pivot.rotation.y += dx * 0.006;
+    pivot.rotation.x = clamp(pivot.rotation.x + dy * 0.006, -1.25, 1.25);
 
-    velY = dx * 0.0062;
-    velX = dy * 0.0062;
-  } else if (!floating) {
-    scheduleHover(e);
+    velY = dx * 0.006;
+    velX = dy * 0.006;
   }
 });
 
@@ -982,7 +466,6 @@ stage.addEventListener('wheel', (e) => {
   camera.lookAt(0, 0, 0);
 }, { passive: false });
 
-/* ============ 浮出層事件 ============ */
 overlay.addEventListener('pointerdown', (e) => {
   if (e.target === floatImg) return;
   returnPhoto();
@@ -1017,39 +500,16 @@ document.getElementById('btnReset').addEventListener('click', () => {
   camera.lookAt(0, 0, 0);
 });
 
-document.getElementById('btnClear').addEventListener('click', async () => {
-  if (!photos.length) return;
+document.getElementById('btnClear').addEventListener('click', () => {
+  if (!pendingFiles.length) return;
   if (!window.confirm('確定要清空所有照片嗎？')) return;
-
-  for (const w of workers) w.terminate();
-  workers.length = 0;
-  workerBusy.fill(false);
-  taskQueue.length = 0;
-  initWorkers();
-
-  photos = [];
-  readyPhotos = [];
-  photosById.clear();
-  nextPhotoId = 0;
-  totalPending = 0;
-  totalDone = 0;
-  progressEl.classList.add('hidden');
-
-  for (const atlas of atlases) atlas.reset();
-
-  await clearDB();
-
+  
+  pendingFiles = [];
+  rebuildSphere();
   updateUI();
 });
 
-/* ============ 上傳入口 ============ */
-fileInput.addEventListener('change', async (e) => {
-  const files = e.target.files;
-  if (files && files.length) await addFiles(files);
-  e.target.value = '';
-});
-
-/* ============ 尺寸 ============ */
+/* ============ 尺寸與主迴圈 ============ */
 function resize() {
   const w = stage.clientWidth;
   const h = stage.clientHeight;
@@ -1068,9 +528,7 @@ function resize() {
   camera.updateProjectionMatrix();
 }
 
-/* ============ 主迴圈 ============ */
 let lastT = performance.now();
-
 function animate(now) {
   requestAnimationFrame(animate);
 
@@ -1093,18 +551,9 @@ function animate(now) {
   renderer.render(scene, camera);
 }
 
-/* ============ 啟動 ============ */
-openDB().then(() => {
-  new ResizeObserver(resize).observe(stage);
-  resize();
-  updateUI();
-  setTimeout(() => {
-    resize();
-    layout();
-    for (const atlas of atlases) atlas.flush();
-  }, 100);
-  requestAnimationFrame(animate);
-});
+new ResizeObserver(resize).observe(stage);
+resize();
+requestAnimationFrame(animate);
 </script>
 </body>
 </html>

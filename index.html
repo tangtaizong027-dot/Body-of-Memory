@@ -5,119 +5,39 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
 <title>照片球體畫廊 · 穩定版</title>
 <style>
+  /* CSS 保持不變，為了篇幅省略，請保留你原本的 CSS */
   *, *::before, *::after { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang TC", "Microsoft JhengHei", sans-serif;
-    background: #f1f4f9;
-    color: #2b3445;
-    overflow: hidden;
-    -webkit-user-select: none;
-    user-select: none;
-    -webkit-tap-highlight-color: transparent;
+    background: #f1f4f9; color: #2b3445; overflow: hidden;
+    -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent;
   }
   #app { display: flex; flex-direction: column; height: 100%; }
-
-  #stage {
-    position: relative;
-    flex: 1 1 auto;
-    min-height: 0;
-    overflow: hidden;
-    touch-action: none;
-    background: radial-gradient(circle at 50% 40%, #ffffff 0%, #f0f4fa 55%, #e3eaf4 100%);
-  }
+  #stage { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; touch-action: none; background: radial-gradient(circle at 50% 40%, #ffffff 0%, #f0f4fa 55%, #e3eaf4 100%); }
   #c { display: block; width: 100%; height: 100%; }
-
-  #hud {
-    position: absolute; top: 14px; left: 0; right: 0;
-    display: flex; justify-content: center;
-    pointer-events: none;
-    transition: opacity .3s ease;
-  }
+  #hud { position: absolute; top: 14px; left: 0; right: 0; display: flex; justify-content: center; pointer-events: none; transition: opacity .3s ease; }
   #hud.dim { opacity: 0; }
-  .pill {
-    font-size: 12.5px; letter-spacing: .3px;
-    color: #6b7a92;
-    background: rgba(255,255,255,.72);
-    border: 1px solid rgba(255,255,255,.9);
-    padding: 6px 14px; border-radius: 999px;
-    backdrop-filter: blur(10px);
-    box-shadow: 0 2px 10px rgba(60,80,120,.08);
-  }
-
-  #empty {
-    position: absolute; inset: 0;
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 8px;
-    font-size: 15px; color: #7a879c;
-    pointer-events: none;
-    text-align: center;
-  }
+  .pill { font-size: 12.5px; letter-spacing: .3px; color: #6b7a92; background: rgba(255,255,255,.72); border: 1px solid rgba(255,255,255,.9); padding: 6px 14px; border-radius: 999px; backdrop-filter: blur(10px); box-shadow: 0 2px 10px rgba(60,80,120,.08); }
+  #empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; font-size: 15px; color: #7a879c; pointer-events: none; text-align: center; }
   #empty span { font-size: 12.5px; color: #9aa6b8; }
   #empty.hidden { display: none; }
-
-  #panel {
-    flex: 0 0 auto;
-    display: flex; align-items: center; justify-content: space-between;
-    gap: 14px; padding: 12px 20px calc(12px + env(safe-area-inset-bottom, 0px));
-    background: #ffffff;
-    border-top: 1px solid #e5ebf3;
-    flex-wrap: wrap;
-  }
+  #panel { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 20px calc(12px + env(safe-area-inset-bottom, 0px)); background: #ffffff; border-top: 1px solid #e5ebf3; flex-wrap: wrap; }
   .info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .count { font-size: 14px; color: #5a6880; }
   .count b { color: #1f2a3d; font-size: 17px; margin-right: 2px; }
   .sel { font-size: 12px; color: #8a97aa; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .actions { display: flex; gap: 8px; flex-wrap: wrap; }
-  .btn {
-    appearance: none; border: 1px solid #dde4ee;
-    background: #f7f9fc; color: #4a5870;
-    font: inherit; font-size: 13px;
-    padding: 8px 14px; border-radius: 9px;
-    cursor: pointer;
-    transition: background .18s ease, border-color .18s ease, transform .1s ease;
-    white-space: nowrap;
-  }
+  .btn { appearance: none; border: 1px solid #dde4ee; background: #f7f9fc; color: #4a5870; font: inherit; font-size: 13px; padding: 8px 14px; border-radius: 9px; cursor: pointer; transition: background .18s ease, border-color .18s ease, transform .1s ease; white-space: nowrap; }
   .btn:hover { background: #eef2f8; border-color: #cfd8e6; }
   .btn:active { transform: scale(.97); }
-  .btn.primary {
-    background: linear-gradient(135deg, #5b8def, #8a6bf5);
-    border-color: transparent; color: #fff; font-weight: 600;
-    box-shadow: 0 4px 14px rgba(91,141,239,.28);
-  }
-
-  #overlay {
-    position: fixed; inset: 0; z-index: 60;
-    display: flex; align-items: center; justify-content: center;
-    pointer-events: none;
-    background: rgba(240,244,250,0);
-    transition: background .38s ease;
-  }
-  #overlay.active {
-    pointer-events: auto;
-    background: rgba(240,244,250,.88);
-    backdrop-filter: blur(14px);
-  }
-  #floatImg {
-    display: block;
-    border-radius: 10px;
-    box-shadow: 0 30px 80px rgba(60,80,120,.28), 0 0 0 1px rgba(255,255,255,.9);
-    will-change: transform, opacity;
-    pointer-events: none;
-    -webkit-user-drag: none;
-    user-select: none;
-    background: #fff;
-  }
+  .btn.primary { background: linear-gradient(135deg, #5b8def, #8a6bf5); border-color: transparent; color: #fff; font-weight: 600; box-shadow: 0 4px 14px rgba(91,141,239,.28); }
+  #overlay { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; pointer-events: none; background: rgba(240,244,250,0); transition: background .38s ease; }
+  #overlay.active { pointer-events: auto; background: rgba(240,244,250,.88); backdrop-filter: blur(14px); }
+  #floatImg { display: block; border-radius: 10px; box-shadow: 0 30px 80px rgba(60,80,120,.28), 0 0 0 1px rgba(255,255,255,.9); will-change: transform, opacity; pointer-events: none; -webkit-user-drag: none; user-select: none; background: #fff; }
   #overlay.active #floatImg { pointer-events: auto; cursor: zoom-out; }
-  #floatMeta {
-    position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%);
-    font-size: 12.5px; color: #7a879c;
-    opacity: 0; transition: opacity .3s ease .2s;
-    pointer-events: none;
-    white-space: nowrap;
-  }
+  #floatMeta { position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%); font-size: 12.5px; color: #7a879c; opacity: 0; transition: opacity .3s ease .2s; pointer-events: none; white-space: nowrap; }
   #overlay.active #floatMeta { opacity: 1; }
-
   @media (max-width: 560px) {
     #panel { padding: 10px 14px calc(10px + env(safe-area-inset-bottom, 0px)); }
     .actions { width: 100%; justify-content: space-between; }
@@ -188,7 +108,7 @@ const pivot  = new THREE.Group();
 scene.add(pivot);
 
 /* ============ 狀態 ============ */
-let photos = []; // 存放 { mesh, texture, url, aspect, name, pos, normal }
+let photos = [];
 let meshes = [];
 
 let dragging = false;
@@ -205,11 +125,12 @@ let returning = false;
 let selectedPhoto = null;
 let floatOrigin = { x: 0, y: 0 };
 
+let pendingFiles = [];
+
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 /* ============ 布局邏輯 ============ */
 function rebuildSphere() {
-  // 清除舊的 Mesh
   for (const p of photos) {
     if (p.mesh) {
       pivot.remove(p.mesh);
@@ -227,33 +148,27 @@ function rebuildSphere() {
   if (!n) return;
 
   const golden = Math.PI * (3 - Math.sqrt(5));
-  // 調整基礎尺寸，保證照片夠大
   const baseSize = Math.max(0.4, Math.min(0.9, 8.0 / Math.sqrt(n)));
 
   for (let i = 0; i < n; i++) {
     const file = pendingFiles[i];
     const aspect = file.aspect || 1;
 
-    // 計算球面座標
     const y = n === 1 ? 0 : 1 - (i / (n - 1)) * 2;
     const r = Math.sqrt(Math.max(0, 1 - y * y));
     const theta = golden * i;
     
-    const dir = new THREE.Vector3(
-      Math.cos(theta) * r, y, Math.sin(theta) * r
-    ).normalize();
-
+    const dir = new THREE.Vector3(Math.cos(theta) * r, y, Math.sin(theta) * r).normalize();
     const pos = dir.clone().multiplyScalar(RADIUS);
 
     let w, h;
     if (aspect >= 1) { w = baseSize; h = baseSize / aspect; }
     else             { h = baseSize; w = baseSize * aspect; }
 
-    // 建立最基礎的 Mesh
     const geo = new THREE.PlaneGeometry(w, h);
     const mat = new THREE.MeshBasicMaterial({
       map: file.texture,
-      side: THREE.DoubleSide, // 雙面可見
+      side: THREE.DoubleSide,
       transparent: true,
       opacity: 1,
     });
@@ -265,7 +180,10 @@ function rebuildSphere() {
     pivot.add(mesh);
     
     const photoData = {
-      mesh, texture: file.texture, url: file.url, aspect, name: file.name,
+      mesh, texture: file.texture, 
+      thumbUrl: file.thumbUrl, 
+      displayUrl: file.displayUrl, // 新增：高畫質大圖
+      aspect, name: file.name,
       pos, normal: dir, w, h
     };
     photos.push(photoData);
@@ -273,15 +191,12 @@ function rebuildSphere() {
   }
 }
 
-let pendingFiles = [];
-
-/* ============ 處理上傳 ============ */
+/* ============ 處理上傳（生成兩份圖片） ============ */
 fileInput.addEventListener('change', async (e) => {
   const files = Array.from(e.target.files || []).filter(f => f.type.startsWith('image/'));
   if (!files.length) return;
   e.target.value = '';
 
-  // 讀取圖片並生成紋理
   for (const file of files) {
     try {
       const url = URL.createObjectURL(file);
@@ -292,27 +207,40 @@ fileInput.addEventListener('change', async (e) => {
         img.onerror = reject;
       });
 
-      // 為了效能，用 Canvas 縮到最大邊 512px
-      const scale = Math.min(1, 512 / Math.max(img.width, img.height));
-      const cw = Math.max(1, Math.round(img.width * scale));
-      const ch = Math.max(1, Math.round(img.height * scale));
+      // 1. 生成球面縮圖 (最大邊 512px，保持效能)
+      const scaleThumb = Math.min(1, 512 / Math.max(img.width, img.height));
+      const tw = Math.max(1, Math.round(img.width * scaleThumb));
+      const th = Math.max(1, Math.round(img.height * scaleThumb));
+      const cvThumb = document.createElement('canvas');
+      cvThumb.width = tw;
+      cvThumb.height = th;
+      cvThumb.getContext('2d').drawImage(img, 0, 0, tw, th);
+      const thumbUrl = cvThumb.toDataURL('image/jpeg', 0.85);
 
-      const cv = document.createElement('canvas');
-      cv.width = cw;
-      cv.height = ch;
-      const ctx = cv.getContext('2d');
-      ctx.drawImage(img, 0, 0, cw, ch);
+      // 2. 生成點擊大圖 (最大邊 1024px，保持清晰度)
+      const scaleDisplay = Math.min(1, 1024 / Math.max(img.width, img.height));
+      const dw = Math.max(1, Math.round(img.width * scaleDisplay));
+      const dh = Math.max(1, Math.round(img.height * scaleDisplay));
+      const cvDisplay = document.createElement('canvas');
+      cvDisplay.width = dw;
+      cvDisplay.height = dh;
+      cvDisplay.getContext('2d').drawImage(img, 0, 0, dw, dh);
+      const displayUrl = cvDisplay.toDataURL('image/jpeg', 0.9);
 
-      const tex = new THREE.CanvasTexture(cv);
+      // 用縮圖生成 Three.js 紋理
+      const tex = new THREE.CanvasTexture(cvThumb);
       tex.colorSpace = THREE.SRGBColorSpace;
       tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
 
       pendingFiles.push({
         texture: tex,
-        url: cv.toDataURL('image/jpeg', 0.85),
-        aspect: cw / ch,
+        thumbUrl: thumbUrl,
+        displayUrl: displayUrl, // 儲存大圖
+        aspect: img.width / img.height,
         name: file.name
       });
+
+      URL.revokeObjectURL(url);
     } catch (err) {
       console.warn('讀取圖片失敗', err);
     }
@@ -341,7 +269,6 @@ function pick(cx, cy) {
   const hits = raycaster.intersectObjects(meshes, false);
 
   if (hits.length > 0) {
-    // 找到對應的 photo 物件
     const hitMesh = hits[0].object;
     return photos.find(p => p.mesh === hitMesh);
   }
@@ -355,7 +282,8 @@ async function floatPhoto(photo, cx, cy) {
   selectedPhoto = photo;
   velX = velY = 0;
 
-  floatImg.src = photo.url;
+  // 使用高畫質大圖
+  floatImg.src = photo.displayUrl;
   floatMeta.textContent = `${photo.name || '照片'} · 雙擊或按 ESC 返回`;
 
   const maxW = Math.min(window.innerWidth * 0.86, 1200);
